@@ -35,6 +35,27 @@ app.use(express.json());
 // Inicialización asíncrona del servicio de WhatsApp
 whatsappService.initializeWhatsApp(pool);
 
+// Asegurar que el usuario admin por defecto existe en la base de datos
+const ensureAdminUserExists = async () => {
+  try {
+    const res = await pool.query('SELECT * FROM users WHERE username = $1', ['admin']);
+    if (res.rows.length === 0) {
+      console.log('[DB] El usuario admin no existe. Creándolo...');
+      const hashedPassword = await bcrypt.hash('sansonAdmin123', 10);
+      await pool.query(
+        'INSERT INTO users (username, password, role) VALUES ($1, $2, $3)',
+        ['admin', hashedPassword, 'admin']
+      );
+      console.log('[DB] Usuario admin creado con éxito (admin / sansonAdmin123)');
+    } else {
+      console.log('[DB] El usuario admin ya existe en la base de datos.');
+    }
+  } catch (err) {
+    console.error('[DB ERROR] Error al verificar/crear usuario admin:', err);
+  }
+};
+ensureAdminUserExists();
+
 // ==========================================
 // RUTA DE AUTENTICACIÓN (LOGIN)
 // ==========================================
