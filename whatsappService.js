@@ -1,6 +1,6 @@
 // whatsappService.js
 // Servicio de WhatsApp ligero con Baileys y persistencia en PostgreSQL
-const { default: makeWASocket, DisconnectReason, BufferJSON, initAuthCreds } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, BufferJSON, initAuthCreds, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 
 // Logger mínimo para ahorrar memoria y procesamiento en Render
@@ -98,13 +98,26 @@ const initializeWhatsApp = async (pool, sessionId = 'sanson_default_session') =>
   try {
     console.log(`[WhatsApp] Inicializando servicio para sesión: ${sessionId}`);
     connectionStatus = 'CONNECTING';
+
+    // Obtener la última versión de WhatsApp Web de forma dinámica
+    let version = [2, 3000, 1017531287]; // Fallback seguro
+    try {
+      const { version: latestVersion, isLatest } = await fetchLatestBaileysVersion();
+      version = latestVersion;
+      console.log(`[WhatsApp] Versión obtenida de WA Web: ${version.join('.')}, ¿Es la última?: ${isLatest}`);
+    } catch (err) {
+      console.warn('[WhatsApp] No se pudo obtener la última versión de WA Web, usando fallback:', err.message);
+    }
+
     const { state, saveCreds } = await useDatabaseAuthState(pool, sessionId);
 
     sock = makeWASocket({
+      version,
       auth: state,
       logger,
       printQRInTerminal: false,
-      mobile: false
+      mobile: false,
+      browser: ['Chrome (Sanson CRM)', 'Windows', '10.0']
     });
 
     // Guardar credenciales al actualizarse
