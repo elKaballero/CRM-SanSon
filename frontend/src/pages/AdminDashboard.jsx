@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 
 export default function AdminDashboard() {
@@ -139,6 +140,12 @@ export default function AdminDashboard() {
           <p className="text-slate-400 text-sm mt-1">Panel de control de administración y configuración global</p>
         </div>
         <div className="flex gap-3">
+          <Link 
+            to="/chat"
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-xl transition duration-200 flex items-center gap-2 shadow-lg shadow-emerald-950/20"
+          >
+            💬 Bandeja de Chats
+          </Link>
           <button 
             onClick={handleExportCSV}
             className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium rounded-xl transition duration-200 flex items-center gap-2 border border-slate-700"
@@ -182,16 +189,16 @@ export default function AdminDashboard() {
               </div>
             ) : status.status === 'QR_READY' && status.qr ? (
               <div className="text-center flex flex-col items-center">
-                {/* Contenedor simple para el código QR */}
+                {/* Contenedor del código QR generado dinámicamente */}
                 <div className="bg-white p-3 rounded-xl inline-block shadow-lg">
-                  <div className="text-[7px] font-mono leading-none bg-white text-black p-2 rounded">
-                    <div className="text-center font-sans text-xs font-semibold mb-2">Escanee con WhatsApp</div>
-                    <code className="text-slate-500 break-all select-all font-mono text-[9px] block max-w-[150px]">
-                      {status.qr.substring(0, 45)}...
-                    </code>
-                  </div>
+                  <div className="text-center font-sans text-xs font-semibold mb-2 text-slate-800">Escanee con WhatsApp</div>
+                  <img 
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(status.qr)}`} 
+                    alt="Código QR de WhatsApp" 
+                    className="w-[180px] h-[180px] block"
+                  />
                 </div>
-                <p className="text-amber-400 text-xs mt-3 font-medium">Escanea este código QR desde WhatsApp Web</p>
+                <p className="text-amber-400 text-xs mt-3 font-medium">Escanea este código QR desde tu app de WhatsApp (Dispositivos vinculados)</p>
               </div>
             ) : (
               <div className="text-center text-slate-500">

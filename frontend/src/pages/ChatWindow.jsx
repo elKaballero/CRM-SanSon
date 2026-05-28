@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 
 export default function ChatWindow() {
@@ -110,11 +111,20 @@ export default function ChatWindow() {
       
       {/* 1. SECCIÓN IZQUIERDA: LISTA DE CONTACTOS */}
       <aside className="w-80 border-r border-slate-800 bg-slate-900/40 flex flex-col">
-        <div className="p-5 border-b border-slate-800 bg-slate-900/60">
-          <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-            💬 Chats <span className="text-xs bg-indigo-950 text-indigo-400 border border-indigo-900/40 px-2 py-0.5 rounded-full font-semibold">CRM</span>
-          </h2>
-          <p className="text-slate-400 text-xs mt-1">Contactos registrados en tu campaña</p>
+        <div className="p-5 border-b border-slate-800 bg-slate-900/60 flex justify-between items-center">
+          <div>
+            <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+              💬 Chats <span className="text-xs bg-indigo-950 text-indigo-400 border border-indigo-900/40 px-2 py-0.5 rounded-full font-semibold">CRM</span>
+            </h2>
+            <p className="text-slate-400 text-xs mt-1">Contactos registrados en tu campaña</p>
+          </div>
+          <Link 
+            to="/dashboard"
+            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-750 transition flex items-center gap-1.5"
+            title="Volver al Panel de Administración"
+          >
+            ⚙️ Panel
+          </Link>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
           {contacts.map((contact) => (
