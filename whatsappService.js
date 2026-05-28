@@ -141,25 +141,47 @@ const initializeWhatsApp = async (pool, sessionId = 'sanson_default_session') =>
     sock.ev.on('messages.upsert', (m) => {
       if (m.type === 'notify') {
         for (const msg of m.messages) {
-          if (!msg.key.fromMe && msg.message) {
+          if (msg.message) {
             const from = msg.key.remoteJid;
-            const name = msg.pushName || 'Contacto de WhatsApp';
-            const text = msg.message.conversation || 
-                         msg.message.extendedTextMessage?.text || 
+            const fromMe = msg.key.fromMe;
+            
+            // Descomprimir mensaje si es efímero o de visualización única
+            let messageContent = msg.message;
+            if (messageContent.ephemeralMessage) {
+              messageContent = messageContent.ephemeralMessage.message;
+            }
+            if (messageContent.viewOnceMessage) {
+              messageContent = messageContent.viewOnceMessage.message;
+            }
+            if (messageContent.viewOnceMessageV2) {
+              messageContent = messageContent.viewOnceMessageV2.message;
+            }
+
+            if (!messageContent) continue;
+
+            const text = messageContent.conversation || 
+                         messageContent.extendedTextMessage?.text || 
+                         messageContent.imageMessage?.caption || 
+                         messageContent.videoMessage?.caption || 
                          '[Mensaje no soportado/Multimedia]';
             
-            // Añadir al registro de mensajes en RAM con límite de 100 elementos
-            recentMessages.push({
-              id: msg.key.id,
-              from,
-              name,
-              text,
-              timestamp: msg.messageTimestamp * 1000,
-              fromMe: false
-            });
+            const name = fromMe ? 'Tú' : (msg.pushName || 'Contacto de WhatsApp');
+            
+            // Evitar duplicados si ya fue añadido mediante sendMessage
+            const exists = recentMessages.some((rm) => rm.id === msg.key.id);
+            if (!exists) {
+              recentMessages.push({
+                id: msg.key.id,
+                from,
+                name,
+                text,
+                timestamp: (msg.messageTimestamp || Date.now() / 1000) * 1000,
+                fromMe
+              });
 
-            if (recentMessages.length > 100) {
-              recentMessages.shift();
+              if (recentMessages.length > 100) {
+                recentMessages.shift();
+              }
             }
           }
         }
@@ -179,23 +201,35 @@ const sendMessage = async (jid, text) => {
   if (!sock || connectionStatus !== 'CONNECTED') {
     throw new Error('El servicio de WhatsApp no está conectado actualmente.');
   }
-  // Formatear número de teléfono (JID) si viene limpio sin dominio
-  const formattedJid = jid.includes('@s.whatsapp.net') ? jid : `${jid}@s.whatsapp.net`;
+  
+  // Formatear número de teléfono (JID)
+  let formattedJid = jid;
+  if (jid.endsWith('@g.us')) {
+    // Si es un chat grupal, lo dejamos igual
+  } else {
+    // Si es un chat individual, sanitizamos eliminando cualquier caracter no numérico
+    // y excluyendo el dominio si ya estaba presente
+    const cleanNumber = jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '');
+    formattedJid = `${cleanNumber}@s.whatsapp.net`;
+  }
   
   const result = await sock.sendMessage(formattedJid, { text });
   
   // Guardar mensaje enviado en historial reciente en RAM
-  recentMessages.push({
-    id: result.key.id,
-    from: formattedJid,
-    name: 'Tú',
-    text,
-    timestamp: Date.now(),
-    fromMe: true
-  });
+  const exists = recentMessages.some((rm) => rm.id === result.key.id);
+  if (!exists) {
+    recentMessages.push({
+      id: result.key.id,
+      from: formattedJid,
+      name: 'Tú',
+      text,
+      timestamp: Date.now(),
+      fromMe: true
+    });
 
-  if (recentMessages.length > 100) {
-    recentMessages.shift();
+    if (recentMessages.length > 100) {
+      recentMessages.shift();
+    }
   }
 
   return result;

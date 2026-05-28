@@ -15,6 +15,12 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 // Configuración de base de datos
+if (!process.env.DATABASE_URL) {
+  console.error('\x1b[31m[ERROR CRÍTICO] La variable de entorno DATABASE_URL no está definida.\x1b[0m');
+  console.error('\x1b[33mCrea un archivo .env en la raíz del proyecto basándote en .env.example, o configura DATABASE_URL en las variables de entorno.\x1b[0m');
+  process.exit(1);
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {

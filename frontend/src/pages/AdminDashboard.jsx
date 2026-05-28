@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { api } from '../api.js';
 
 export default function AdminDashboard() {
   const [templates, setTemplates] = useState([]);
@@ -8,15 +9,6 @@ export default function AdminDashboard() {
   const [formData, setFormData] = useState({ title: '', category: 'General', content: '' });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-
-  // Configuración de token JWT obtenido tras autenticación
-  const token = localStorage.getItem('sanson_token');
-
-  // Headers autorizados para peticiones HTTP
-  const getHeaders = () => ({
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${token}`
-  });
 
   useEffect(() => {
     fetchTemplates();
@@ -28,7 +20,7 @@ export default function AdminDashboard() {
 
   const fetchTemplates = async () => {
     try {
-      const res = await fetch('/api/templates', { headers: getHeaders() });
+      const res = await api.get('/api/templates');
       if (res.ok) {
         const data = await res.json();
         setTemplates(data);
@@ -40,7 +32,7 @@ export default function AdminDashboard() {
 
   const fetchWhatsAppStatus = async () => {
     try {
-      const res = await fetch('/api/whatsapp/status', { headers: getHeaders() });
+      const res = await api.get('/api/whatsapp/status');
       if (res.ok) {
         const data = await res.json();
         setStatus(data);
@@ -72,14 +64,11 @@ export default function AdminDashboard() {
     setSuccess('');
 
     const url = editingTemplate ? `/api/templates/${editingTemplate.id}` : '/api/templates';
-    const method = editingTemplate ? 'PUT' : 'POST';
 
     try {
-      const res = await fetch(url, {
-        method,
-        headers: getHeaders(),
-        body: JSON.stringify(formData)
-      });
+      const res = editingTemplate
+        ? await api.put(url, formData)
+        : await api.post(url, formData);
 
       if (!res.ok) {
         const errData = await res.json();
@@ -97,10 +86,7 @@ export default function AdminDashboard() {
   const handleDelete = async (id) => {
     if (!window.confirm('¿Está seguro de eliminar esta plantilla de mensaje?')) return;
     try {
-      const res = await fetch(`/api/templates/${id}`, {
-        method: 'DELETE',
-        headers: getHeaders()
-      });
+      const res = await api.delete(`/api/templates/${id}`);
       if (res.ok) {
         fetchTemplates();
       }
@@ -112,10 +98,7 @@ export default function AdminDashboard() {
   const handleDisconnect = async () => {
     if (!window.confirm('¿Desea desconectar WhatsApp y eliminar credenciales de este servidor?')) return;
     try {
-      await fetch('/api/whatsapp/logout', {
-        method: 'POST',
-        headers: getHeaders()
-      });
+      await api.post('/api/whatsapp/logout');
       fetchWhatsAppStatus();
     } catch (err) {
       console.error('Error al desconectar WhatsApp:', err);
@@ -201,10 +184,7 @@ export default function AdminDashboard() {
               <div className="text-center flex flex-col items-center">
                 {/* Contenedor simple para el código QR */}
                 <div className="bg-white p-3 rounded-xl inline-block shadow-lg">
-                  {/* El frontend suele usar una librería para renderizar QR, o el backend envía la imagen directo.
-                      Aquí proveemos el contenedor para renderizar el código QR de Baileys */}
                   <div className="text-[7px] font-mono leading-none bg-white text-black p-2 rounded">
-                    {/* Renderizamos el hash de forma minimalista para evitar fallos de librerías en UI limpia */}
                     <div className="text-center font-sans text-xs font-semibold mb-2">Escanee con WhatsApp</div>
                     <code className="text-slate-500 break-all select-all font-mono text-[9px] block max-w-[150px]">
                       {status.qr.substring(0, 45)}...

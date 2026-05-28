@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { api } from '../api.js';
 
 export default function ChatWindow() {
   const [contacts, setContacts] = useState([
@@ -14,12 +15,6 @@ export default function ChatWindow() {
   const [loadingSend, setLoadingSend] = useState(false);
   
   const messagesEndRef = useRef(null);
-  const token = localStorage.getItem('sanson_token');
-
-  const getHeaders = () => ({
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${token}`
-  });
 
   // Autodesplazamiento al fondo del chat
   const scrollToBottom = () => {
@@ -47,7 +42,7 @@ export default function ChatWindow() {
 
   const fetchTemplates = async () => {
     try {
-      const res = await fetch('/api/templates', { headers: getHeaders() });
+      const res = await api.get('/api/templates');
       if (res.ok) {
         const data = await res.json();
         setTemplates(data);
@@ -59,12 +54,12 @@ export default function ChatWindow() {
 
   const fetchMessages = async () => {
     try {
-      const res = await fetch('/api/whatsapp/messages', { headers: getHeaders() });
+      const res = await api.get('/api/whatsapp/messages');
       if (res.ok) {
         const data = await res.json();
         // Filtrar mensajes pertenecientes al chat/contacto activo
         const filtered = data.filter(
-          (m) => m.from.includes(activeContact.jid)
+          (m) => m.from && m.from.includes(activeContact.jid)
         );
         setMessages(filtered);
       }
@@ -79,13 +74,9 @@ export default function ChatWindow() {
 
     setLoadingSend(true);
     try {
-      const res = await fetch('/api/whatsapp/send', {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          jid: activeContact.jid,
-          text: inputMsg
-        })
+      const res = await api.post('/api/whatsapp/send', {
+        jid: activeContact.jid,
+        text: inputMsg
       });
 
       if (!res.ok) {
