@@ -96,6 +96,7 @@ const useDatabaseAuthState = async (pool, sessionId) => {
  */
 const initializeWhatsApp = async (pool, sessionId = 'sanson_default_session') => {
   try {
+    console.log(`[WhatsApp] Inicializando servicio para sesión: ${sessionId}`);
     connectionStatus = 'CONNECTING';
     const { state, saveCreds } = await useDatabaseAuthState(pool, sessionId);
 
@@ -112,28 +113,34 @@ const initializeWhatsApp = async (pool, sessionId = 'sanson_default_session') =>
     // Escucha de conexión
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
+      
+      console.log(`[WhatsApp] connection.update: connection=${connection || 'n/a'}, qr=${qr ? 'SÍ' : 'NO'}`);
 
       if (qr) {
         qrCode = qr;
         connectionStatus = 'QR_READY';
+        console.log(`[WhatsApp] Código QR generado e interceptado.`);
       }
 
       if (connection === 'close') {
         const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
         connectionStatus = 'DISCONNECTED';
         qrCode = null;
+        console.log(`[WhatsApp] Conexión cerrada. ¿Reconectar?: ${shouldReconnect}`, lastDisconnect?.error || '');
 
         if (shouldReconnect) {
           // Intentar reconectar tras un breve retraso
           setTimeout(() => initializeWhatsApp(pool, sessionId), 5000);
         } else {
           // Si cerró sesión, limpiamos la base de datos de credenciales
+          console.log(`[WhatsApp] Sesión expirada o cerrada explícitamente. Limpiando DB...`);
           await pool.query('DELETE FROM whatsapp_sessions WHERE session_id = $1', [sessionId]);
           setTimeout(() => initializeWhatsApp(pool, sessionId), 2000);
         }
       } else if (connection === 'open') {
         connectionStatus = 'CONNECTED';
         qrCode = null;
+        console.log(`[WhatsApp] ¡Conectado exitosamente!`);
       }
     });
 
