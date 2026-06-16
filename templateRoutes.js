@@ -15,6 +15,16 @@ module.exports = (pool) => {
     return res.status(200).send('pong');
   });
 
+  // Endpoint de debug temporal
+  router.get('/api/debug/messages', async (req, res) => {
+    try {
+      const result = await pool.query('SELECT * FROM messages ORDER BY timestamp DESC LIMIT 50');
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ==========================================
   // RUTAS DE PLANTILLAS (CRUD)
   // ==========================================
