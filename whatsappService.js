@@ -253,13 +253,18 @@ const sendMessage = async (jid, text) => {
     throw new Error('El servicio de WhatsApp no está conectado actualmente.');
   }
   
-  // Formatear número de teléfono (JID)
+  // Formatear JID
   let formattedJid = jid;
   if (jid.endsWith('@g.us')) {
     // Si es un chat grupal, lo dejamos igual
+  } else if (jid.includes('@')) {
+    // Si tiene dominio (como @lid o @s.whatsapp.net), quitamos el sufijo de dispositivo si existe
+    const [user, server] = jid.split('@');
+    const cleanUser = user.split(':')[0].replace(/\D/g, '');
+    formattedJid = `${cleanUser}@${server}`;
   } else {
-    // Sanitizar: quitar el sufijo de dispositivo y cualquier carácter no numérico
-    const cleanNumber = jid.replace(/@s\.whatsapp\.net$/, '').split(':')[0].replace(/\D/g, '');
+    // Si no tiene dominio, asumimos que es un número de teléfono individual
+    const cleanNumber = jid.replace(/\D/g, '');
     formattedJid = `${cleanNumber}@s.whatsapp.net`;
   }
   

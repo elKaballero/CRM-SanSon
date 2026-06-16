@@ -55,6 +55,9 @@ const ensureAdminUserExists = async () => {
       );
       console.log('[DB] Contraseña del usuario admin restablecida con éxito.');
     }
+    // Migración temporal para fusionar JIDs incorrectos de LID
+    await pool.query("UPDATE messages SET jid = '46389975335013@lid' WHERE jid = '46389975335013@s.whatsapp.net'");
+    console.log('[DB] Fusionados JIDs antiguos de @s.whatsapp.net a @lid.');
   } catch (err) {
     console.error('[DB ERROR] Error al verificar/crear/actualizar usuario admin:', err);
   }
