@@ -16,7 +16,9 @@ const extractPhone = (jid = '') => jid.split('@')[0].split(':')[0].replace(/[^0-
 // Formatea la hora o fecha del último mensaje
 const formatTimestamp = (ts) => {
   if (!ts) return '';
-  const d = new Date(ts);
+  const parsedTs = typeof ts === 'string' && /^\d+$/.test(ts) ? parseInt(ts, 10) : ts;
+  const d = new Date(parsedTs);
+  if (isNaN(d.getTime())) return '';
   const now = new Date();
   const isToday = d.toDateString() === now.toDateString();
   if (isToday) {
@@ -54,20 +56,22 @@ export default function ChatWindow() {
       const jid = msg.from;
       if (!jid || jid.includes('status@broadcast') || jid.includes('@g.us')) continue;
 
+      const msgTs = typeof msg.timestamp === 'string' && /^\d+$/.test(msg.timestamp) ? parseInt(msg.timestamp, 10) : Number(msg.timestamp);
+
       if (!map[jid]) {
         map[jid] = {
           jid,
           phone: extractPhone(jid),
           name: msg.name && !msg.fromMe ? msg.name : null,
           lastMessage: msg.text,
-          lastTimestamp: msg.timestamp,
+          lastTimestamp: msgTs,
           unread: 0,
         };
       } else {
         // Actualizar si este mensaje es más reciente
-        if (msg.timestamp > map[jid].lastTimestamp) {
+        if (msgTs > map[jid].lastTimestamp) {
           map[jid].lastMessage = msg.text;
-          map[jid].lastTimestamp = msg.timestamp;
+          map[jid].lastTimestamp = msgTs;
         }
         // Guardar nombre del contacto si vino del remoto
         if (msg.name && !msg.fromMe && !map[jid].name) {
@@ -391,7 +395,7 @@ export default function ChatWindow() {
                     >
                       <p className="leading-relaxed break-words whitespace-pre-wrap">{msg.text}</p>
                       <span className={`text-[9px] block text-right mt-1.5 ${msg.fromMe ? 'text-indigo-200' : 'text-slate-500'}`}>
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {new Date(typeof msg.timestamp === 'string' && /^\d+$/.test(msg.timestamp) ? parseInt(msg.timestamp, 10) : msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
                   </div>
