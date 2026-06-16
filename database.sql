@@ -36,6 +36,22 @@ CREATE TABLE IF NOT EXISTS whatsapp_sessions (
 -- Índices para optimizar las consultas de sesión de Baileys
 CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_lookup ON whatsapp_sessions (session_id, key);
 
+-- Tabla de Mensajes de WhatsApp (Historial Persistente)
+-- Guarda todos los mensajes enviados y recibidos en la DB para sobrevivir reinicios del servidor
+CREATE TABLE IF NOT EXISTS messages (
+    id VARCHAR(100) PRIMARY KEY,                          -- Key ID único de Baileys
+    jid VARCHAR(150) NOT NULL,                            -- JID del contacto remoto (normalizado, sin sufijo :deviceId)
+    from_me BOOLEAN NOT NULL DEFAULT FALSE,               -- TRUE si fue enviado por nosotros
+    sender_name VARCHAR(255),                             -- Nombre push del contacto
+    body TEXT,                                            -- Cuerpo del mensaje de texto
+    timestamp BIGINT NOT NULL,                            -- Timestamp en milisegundos
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Índices para consultas rápidas por contacto y orden cronológico
+CREATE INDEX IF NOT EXISTS idx_messages_jid ON messages (jid);
+CREATE INDEX IF NOT EXISTS idx_messages_ts  ON messages (timestamp DESC);
+
 -- Inserción de un usuario administrador por defecto para la primera entrada
 -- Nota: La contraseña está hasheada con bcrypt (coste 10), es 'sansonAdmin123'
 INSERT INTO users (username, password, role)

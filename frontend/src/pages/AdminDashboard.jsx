@@ -14,10 +14,14 @@ export default function AdminDashboard() {
   useEffect(() => {
     fetchTemplates();
     fetchWhatsAppStatus();
-    // Consultar el estado de la conexión de WhatsApp de forma periódica
-    const interval = setInterval(fetchWhatsAppStatus, 15000);
-    return () => clearInterval(interval);
   }, []);
+
+  // Polling adaptativo: 3s cuando hay QR pendiente (expira en ~20s), 15s si está conectado/desconectado
+  useEffect(() => {
+    const delay = status.status === 'QR_READY' ? 3000 : 15000;
+    const interval = setInterval(fetchWhatsAppStatus, delay);
+    return () => clearInterval(interval);
+  }, [status.status]);
 
   const fetchTemplates = async () => {
     try {

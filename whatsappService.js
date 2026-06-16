@@ -9,7 +9,37 @@ const logger = pino({ level: 'silent' });
 let sock = null;
 let qrCode = null;
 let connectionStatus = 'DISCONNECTED'; // DISCONNECTED, CONNECTING, QR_READY, CONNECTED
-let recentMessages = []; // Memoria RAM ultraligera para últimos mensajes en tiempo real (límite 100)
+
+// Pool de DB inyectado al inicializar, usado por sendMessage
+let _pool = null;
+
+/**
+ * Normaliza un JID de WhatsApp eliminando el sufijo de dispositivo multi-device.
+ * Ej: "573001234567:3@s.whatsapp.net" → "573001234567@s.whatsapp.net"
+ * Ej: "573001234567@s.whatsapp.net"   → "573001234567@s.whatsapp.net" (sin cambio)
+ */
+const normalizeJid = (jid = '') => {
+  if (!jid) return jid;
+  const [user, server] = jid.split('@');
+  const cleanUser = user.split(':')[0];
+  return `${cleanUser}@${server || 's.whatsapp.net'}`;
+};
+
+/**
+ * Guarda un mensaje en PostgreSQL. Usa ON CONFLICT DO NOTHING para ignorar duplicados.
+ */
+const persistMessage = async (pool, { id, jid, fromMe, senderName, body, timestamp }) => {
+  try {
+    await pool.query(
+      `INSERT INTO messages (id, jid, from_me, sender_name, body, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO NOTHING`,
+      [id, normalizeJid(jid), fromMe, senderName || null, body || null, timestamp]
+    );
+  } catch (err) {
+    console.error('[WhatsApp] Error al persistir mensaje en DB:', err.message);
+  }
+};
 
 /**
  * Adaptador de estado de autenticación de Baileys para PostgreSQL.
@@ -96,6 +126,9 @@ const useDatabaseAuthState = async (pool, sessionId) => {
  */
 const initializeWhatsApp = async (pool, sessionId = 'sanson_default_session') => {
   try {
+    // Guardar referencia al pool para usarlo en sendMessage
+    _pool = pool;
+
     console.log(`[WhatsApp] Inicializando servicio para sesión: ${sessionId}`);
     connectionStatus = 'CONNECTING';
 
@@ -157,53 +190,51 @@ const initializeWhatsApp = async (pool, sessionId = 'sanson_default_session') =>
       }
     });
 
-    // Gestión de mensajes recibidos (Historial básico en RAM)
-    sock.ev.on('messages.upsert', (m) => {
+    // Gestión de mensajes recibidos — persiste en PostgreSQL
+    sock.ev.on('messages.upsert', async (m) => {
       if (m.type === 'notify') {
         for (const msg of m.messages) {
-          if (msg.message) {
-            const from = msg.key.remoteJid;
-            const fromMe = msg.key.fromMe;
-            
-            // Descomprimir mensaje si es efímero o de visualización única
-            let messageContent = msg.message;
-            if (messageContent.ephemeralMessage) {
-              messageContent = messageContent.ephemeralMessage.message;
-            }
-            if (messageContent.viewOnceMessage) {
-              messageContent = messageContent.viewOnceMessage.message;
-            }
-            if (messageContent.viewOnceMessageV2) {
-              messageContent = messageContent.viewOnceMessageV2.message;
-            }
+          if (!msg.message) continue;
 
-            if (!messageContent) continue;
+          const from = msg.key.remoteJid;
+          const fromMe = msg.key.fromMe;
 
-            const text = messageContent.conversation || 
-                         messageContent.extendedTextMessage?.text || 
-                         messageContent.imageMessage?.caption || 
-                         messageContent.videoMessage?.caption || 
-                         '[Mensaje no soportado/Multimedia]';
-            
-            const name = fromMe ? 'Tú' : (msg.pushName || 'Contacto de WhatsApp');
-            
-            // Evitar duplicados si ya fue añadido mediante sendMessage
-            const exists = recentMessages.some((rm) => rm.id === msg.key.id);
-            if (!exists) {
-              recentMessages.push({
-                id: msg.key.id,
-                from,
-                name,
-                text,
-                timestamp: (msg.messageTimestamp || Date.now() / 1000) * 1000,
-                fromMe
-              });
+          // Ignorar mensajes de estado y grupos
+          if (!from || from.includes('status@broadcast') || from.includes('@g.us')) continue;
 
-              if (recentMessages.length > 100) {
-                recentMessages.shift();
-              }
-            }
+          // Descomprimir mensaje si es efímero o de visualización única
+          let messageContent = msg.message;
+          if (messageContent.ephemeralMessage) {
+            messageContent = messageContent.ephemeralMessage.message;
           }
+          if (messageContent.viewOnceMessage) {
+            messageContent = messageContent.viewOnceMessage.message;
+          }
+          if (messageContent.viewOnceMessageV2) {
+            messageContent = messageContent.viewOnceMessageV2.message;
+          }
+
+          if (!messageContent) continue;
+
+          const body =
+            messageContent.conversation ||
+            messageContent.extendedTextMessage?.text ||
+            messageContent.imageMessage?.caption ||
+            messageContent.videoMessage?.caption ||
+            '[Mensaje multimedia]';
+
+          const senderName = fromMe ? 'Tú' : (msg.pushName || null);
+          const timestamp = (msg.messageTimestamp || Math.floor(Date.now() / 1000)) * 1000;
+
+          // Persistir en PostgreSQL (fuente de verdad)
+          await persistMessage(pool, {
+            id: msg.key.id,
+            jid: from,
+            fromMe,
+            senderName,
+            body,
+            timestamp,
+          });
         }
       }
     });
@@ -227,29 +258,23 @@ const sendMessage = async (jid, text) => {
   if (jid.endsWith('@g.us')) {
     // Si es un chat grupal, lo dejamos igual
   } else {
-    // Si es un chat individual, sanitizamos eliminando cualquier caracter no numérico
-    // y excluyendo el dominio si ya estaba presente
-    const cleanNumber = jid.replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '');
+    // Sanitizar: quitar el sufijo de dispositivo y cualquier carácter no numérico
+    const cleanNumber = jid.replace(/@s\.whatsapp\.net$/, '').split(':')[0].replace(/\D/g, '');
     formattedJid = `${cleanNumber}@s.whatsapp.net`;
   }
   
   const result = await sock.sendMessage(formattedJid, { text });
   
-  // Guardar mensaje enviado en historial reciente en RAM
-  const exists = recentMessages.some((rm) => rm.id === result.key.id);
-  if (!exists) {
-    recentMessages.push({
+  // Persistir mensaje enviado en PostgreSQL
+  if (_pool && result?.key?.id) {
+    await persistMessage(_pool, {
       id: result.key.id,
-      from: formattedJid,
-      name: 'Tú',
-      text,
+      jid: formattedJid,
+      fromMe: true,
+      senderName: 'Tú',
+      body: text,
       timestamp: Date.now(),
-      fromMe: true
     });
-
-    if (recentMessages.length > 100) {
-      recentMessages.shift();
-    }
   }
 
   return result;
@@ -271,7 +296,6 @@ const logoutWhatsApp = async (pool, sessionId = 'sanson_default_session') => {
 
 const getQrCode = () => qrCode;
 const getConnectionStatus = () => connectionStatus;
-const getRecentMessages = () => recentMessages;
 const getSocket = () => sock;
 
 module.exports = {
@@ -280,6 +304,6 @@ module.exports = {
   logoutWhatsApp,
   getQrCode,
   getConnectionStatus,
-  getRecentMessages,
-  getSocket
+  getSocket,
+  normalizeJid,
 };

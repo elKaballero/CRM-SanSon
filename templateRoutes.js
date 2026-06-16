@@ -96,9 +96,48 @@ module.exports = (pool) => {
     res.json({ status, qr });
   });
 
-  // Obtener historial básico de mensajes recientes de WhatsApp (Admin y Responsable)
-  router.get('/api/whatsapp/messages', authenticateToken, (req, res) => {
-    res.json(whatsappService.getRecentMessages());
+  // Obtener historial de mensajes desde PostgreSQL (Admin y Responsable)
+  // Soporta filtrado por ?jid=... para cargar solo los mensajes de un contacto
+  router.get('/api/whatsapp/messages', authenticateToken, async (req, res) => {
+    try {
+      const { jid } = req.query;
+
+      let query, params;
+
+      if (jid) {
+        // Filtrar por JID normalizado (quita sufijo de dispositivo multi-device)
+        const normalizedJid = whatsappService.normalizeJid(jid);
+        query = `
+          SELECT id, jid, from_me AS "fromMe", sender_name AS name, body AS text, timestamp
+          FROM messages
+          WHERE jid = $1
+          ORDER BY timestamp ASC
+          LIMIT 300
+        `;
+        params = [normalizedJid];
+      } else {
+        // Sin filtro: devuelve los últimos 200 mensajes (para construir lista de conversaciones)
+        query = `
+          SELECT id, jid AS "from", from_me AS "fromMe", sender_name AS name, body AS text, timestamp
+          FROM messages
+          ORDER BY timestamp DESC
+          LIMIT 200
+        `;
+        params = [];
+      }
+
+      const result = await pool.query(query, params);
+
+      // Para la vista de chat individual, mapear "from" al campo esperado por el frontend
+      const rows = jid
+        ? result.rows.map(r => ({ ...r, from: r.jid }))
+        : result.rows;
+
+      res.json(rows);
+    } catch (err) {
+      console.error('[API] Error al obtener mensajes:', err);
+      res.status(500).json({ error: 'Error al obtener mensajes' });
+    }
   });
 
   // Enviar un mensaje de WhatsApp a demanda (Admin y Responsable)
