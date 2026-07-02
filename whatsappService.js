@@ -1,6 +1,13 @@
 // whatsappService.js
 // Servicio de WhatsApp ligero con Baileys y persistencia en PostgreSQL
-const { default: makeWASocket, DisconnectReason, BufferJSON, initAuthCreds, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const {
+  default: makeWASocket,
+  DisconnectReason,
+  BufferJSON,
+  initAuthCreds,
+  fetchLatestBaileysVersion,
+  downloadMediaMessage,
+} = require('@whiskeysockets/baileys');
 const pino = require('pino');
 
 // Logger mínimo para ahorrar memoria y procesamiento en Render
@@ -32,15 +39,21 @@ const normalizeJid = (jid = '') => {
 };
 
 /**
- * Guarda un mensaje en PostgreSQL. Usa ON CONFLICT DO NOTHING para ignorar duplicados.
+ * Persiste un mensaje en PostgreSQL.
+ * Usa UPSERT (ON CONFLICT DO UPDATE) para:
+ *  - No duplicar mensajes ya existentes.
+ *  - Actualizar el body/senderName si llegan con más datos (ej. historial inicial).
  */
-const persistMessage = async (pool, { id, jid, fromMe, senderName, body, timestamp }) => {
+const persistMessage = async (pool, { id, jid, fromMe, senderName, body, mediaType, timestamp }) => {
   try {
     await pool.query(
-      `INSERT INTO messages (id, jid, from_me, sender_name, body, timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (id) DO NOTHING`,
-      [id, normalizeJid(jid), fromMe, senderName || null, body || null, timestamp]
+      `INSERT INTO messages (id, jid, from_me, sender_name, body, media_type, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (id) DO UPDATE
+         SET body        = COALESCE(EXCLUDED.body,        messages.body),
+             sender_name = COALESCE(EXCLUDED.sender_name, messages.sender_name),
+             media_type  = COALESCE(EXCLUDED.media_type,  messages.media_type)`,
+      [id, normalizeJid(jid), fromMe, senderName || null, body || null, mediaType || null, timestamp]
     );
   } catch (err) {
     console.error('[WhatsApp] Error al persistir mensaje en DB:', err.message);
@@ -196,62 +209,101 @@ const initializeWhatsApp = async (pool, sessionId = 'sanson_default_session') =>
       }
     });
 
-    // Gestión de mensajes recibidos — persiste en PostgreSQL
-    sock.ev.on('messages.upsert', async (m) => {
-      if (m.type === 'notify') {
-        for (const msg of m.messages) {
-          if (!msg.message) continue;
+    // ── Procesar un objeto de mensaje de Baileys y persistirlo ──────────────
+    const processAndPersistMsg = async (msg) => {
+      if (!msg.message && !msg.key) return;  // entrada vacía
 
-          const from = msg.key.remoteJid;
-          const fromMe = msg.key.fromMe;
+      const from   = msg.key.remoteJid;
+      const fromMe = !!msg.key.fromMe;
 
-          // Ignorar mensajes de estado y grupos
-          if (!from || from.includes('status@broadcast') || from.includes('@g.us')) continue;
+      // Ignorar estado y grupos
+      if (!from || from.includes('status@broadcast') || from.includes('@g.us')) return;
 
-          // Descomprimir mensaje si es efímero o de visualización única
-          let messageContent = msg.message;
-          if (messageContent.ephemeralMessage) {
-            messageContent = messageContent.ephemeralMessage.message;
+      // Descomprimir capas de wrapping (efímero, viewOnce)
+      let mc = msg.message || {};
+      mc = mc.ephemeralMessage?.message   || mc;
+      mc = mc.viewOnceMessage?.message    || mc;
+      mc = mc.viewOnceMessageV2?.message  || mc;
+
+      // ── Detectar tipo de media ────────────────────────────────────────────
+      const IMAGE_KEY    = mc.imageMessage    ? 'imageMessage'    : null;
+      const VIDEO_KEY    = mc.videoMessage    ? 'videoMessage'    : null;
+      const DOC_KEY      = mc.documentMessage ? 'documentMessage' : null;
+      const AUDIO_KEY    = mc.audioMessage    ? 'audioMessage'    : null;
+      const mediaKey     = IMAGE_KEY || VIDEO_KEY || DOC_KEY || AUDIO_KEY;
+
+      let body      = null;
+      let mediaType = null;
+
+      if (mediaKey) {
+        // Caption de la imagen/vídeo como texto de prevista
+        const caption = mc[mediaKey]?.caption || null;
+        mediaType = mediaKey.replace('Message', ''); // 'image', 'video', etc.
+
+        try {
+          // downloadMediaMessage requiere el objeto msg original completo
+          const buffer = await downloadMediaMessage(
+            { ...msg, message: mc },       // aseguramos que mc sea el message del nivel correcto
+            'buffer',
+            {},
+            { logger, reuploadRequest: sock.updateMediaMessage }
+          );
+
+          if (buffer && buffer.length > 0) {
+            const mimeType = mc[mediaKey]?.mimetype || 'application/octet-stream';
+            // Guardar como data URI (Base64) — el frontend puede renderizarlo directamente
+            // Nota: para archivos grandes (>1 MB) considera guardar en disco/S3 y almacenar la URL.
+            const MAX_B64_BYTES = 1.5 * 1024 * 1024; // 1.5 MB límite razonable
+            if (buffer.length <= MAX_B64_BYTES) {
+              body = `data:${mimeType};base64,${buffer.toString('base64')}`;
+            } else {
+              // Archivo demasiado grande: guardar caption o indicador con tipo
+              body = caption || `[${mediaType}: archivo grande, ${Math.round(buffer.length / 1024)} KB]`;
+            }
+          } else {
+            body = caption || `[${mediaType}]`;
           }
-          if (messageContent.viewOnceMessage) {
-            messageContent = messageContent.viewOnceMessage.message;
-          }
-          if (messageContent.viewOnceMessageV2) {
-            messageContent = messageContent.viewOnceMessageV2.message;
-          }
-
-          if (!messageContent) continue;
-
-          const body =
-            messageContent.conversation ||
-            messageContent.extendedTextMessage?.text ||
-            messageContent.imageMessage?.caption ||
-            messageContent.videoMessage?.caption ||
-            '[Mensaje multimedia]';
-
-          // --- Resolución de pushName para JIDs @lid ---
-          // Los JIDs @lid son identificadores opacos internos de WhatsApp; no tienen
-          // número telefónico legible. Intentamos obtener el nombre público del contacto
-          // desde el store en memoria de Baileys antes de persistir.
-          let senderName = fromMe ? 'Tú' : (msg.pushName || null);
-          if (!fromMe && !senderName && from.endsWith('@lid') && sock.store?.contacts) {
-            const normFrom = normalizeJid(from);
-            const contact = sock.store.contacts[normFrom];
-            senderName = contact?.notify || contact?.name || contact?.verifiedName || null;
-          }
-
-          const timestamp = (msg.messageTimestamp || Math.floor(Date.now() / 1000)) * 1000;
-
-          // Persistir en PostgreSQL (fuente de verdad)
-          await persistMessage(pool, {
-            id: msg.key.id,
-            jid: from,
-            fromMe,
-            senderName,
-            body,
-            timestamp,
-          });
+        } catch (dlErr) {
+          console.warn(`[WhatsApp] No se pudo descargar media (${mediaKey}):`, dlErr.message);
+          body = caption || `[${mediaType}]`;
         }
+      } else {
+        // Mensaje de texto plano
+        body =
+          mc.conversation ||
+          mc.extendedTextMessage?.text ||
+          null;
+      }
+
+      // ── Resolver nombre del remitente ─────────────────────────────────────
+      let senderName = fromMe ? 'Tú' : (msg.pushName || null);
+      if (!fromMe && !senderName && from.endsWith('@lid') && sock.store?.contacts) {
+        const contact = sock.store.contacts[normalizeJid(from)];
+        senderName = contact?.notify || contact?.name || contact?.verifiedName || null;
+      }
+
+      const timestamp = (msg.messageTimestamp || Math.floor(Date.now() / 1000)) * 1000;
+
+      await persistMessage(pool, { id: msg.key.id, jid: from, fromMe, senderName, body, mediaType, timestamp });
+    };
+
+    // ── Evento principal: mensajes nuevos y propios (notify) o historial reciente (append) ──
+    sock.ev.on('messages.upsert', async (m) => {
+      // 'notify' = mensaje nuevo en tiempo real (entrante Y saliente fromMe:true)
+      // 'append'  = historial reciente sincronizado al reconectar
+      if (m.type !== 'notify' && m.type !== 'append') return;
+      for (const msg of m.messages) {
+        await processAndPersistMsg(msg);
+      }
+    });
+
+    // ── Historial inicial completo enviado por WhatsApp al primer sync ────────
+    sock.ev.on('messaging-history.set', async ({ messages: histMsgs, isLatest }) => {
+      console.log(`[WhatsApp] messaging-history.set: ${histMsgs.length} mensajes, isLatest=${isLatest}`);
+      for (const msg of histMsgs) {
+        // El historial puede incluir grupos e items sin key — filtrar aquí
+        if (!msg.key?.remoteJid) continue;
+        await processAndPersistMsg(msg);
       }
     });
 

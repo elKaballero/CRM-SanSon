@@ -43,10 +43,14 @@ CREATE TABLE IF NOT EXISTS messages (
     jid VARCHAR(150) NOT NULL,                            -- JID del contacto remoto (normalizado, sin sufijo :deviceId)
     from_me BOOLEAN NOT NULL DEFAULT FALSE,               -- TRUE si fue enviado por nosotros
     sender_name VARCHAR(255),                             -- Nombre push del contacto
-    body TEXT,                                            -- Cuerpo del mensaje de texto
+    body TEXT,                                            -- Texto del mensaje o data URI Base64 del media
+    media_type VARCHAR(30),                               -- NULL=texto | 'image' | 'video' | 'document' | 'audio'
     timestamp BIGINT NOT NULL,                            -- Timestamp en milisegundos
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Migración segura para bases de datos ya existentes: añade media_type si no existe
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_type VARCHAR(30);
 
 -- Índices para consultas rápidas por contacto y orden cronológico
 CREATE INDEX IF NOT EXISTS idx_messages_jid ON messages (jid);

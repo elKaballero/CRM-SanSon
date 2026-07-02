@@ -118,7 +118,8 @@ module.exports = (pool) => {
         // Filtrar por JID normalizado (quita sufijo de dispositivo multi-device)
         const normalizedJid = whatsappService.normalizeJid(jid);
         query = `
-          SELECT id, jid, from_me AS "fromMe", sender_name AS name, body AS text, timestamp
+          SELECT id, jid, from_me AS "fromMe", sender_name AS name,
+                 body AS text, media_type AS "mediaType", timestamp
           FROM messages
           WHERE jid = $1
           ORDER BY timestamp ASC
@@ -128,7 +129,8 @@ module.exports = (pool) => {
       } else {
         // Sin filtro: devuelve los últimos 200 mensajes (para construir lista de conversaciones)
         query = `
-          SELECT id, jid AS "from", from_me AS "fromMe", sender_name AS name, body AS text, timestamp
+          SELECT id, jid AS "from", from_me AS "fromMe", sender_name AS name,
+                 body AS text, media_type AS "mediaType", timestamp
           FROM messages
           ORDER BY timestamp DESC
           LIMIT 200

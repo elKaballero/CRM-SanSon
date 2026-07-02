@@ -429,25 +429,79 @@ export default function ChatWindow() {
                   <p className="text-xs text-slate-600 mt-1">Escribe un mensaje para iniciar el contacto.</p>
                 </div>
               ) : (
-                messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex ${msg.fromMe ? 'justify-end' : 'justify-start'}`}
-                  >
+                messages.map((msg) => {
+                  const ts = new Date(
+                    typeof msg.timestamp === 'string' && /^\d+$/.test(msg.timestamp)
+                      ? parseInt(msg.timestamp, 10)
+                      : msg.timestamp
+                  ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+                  // ── Renderizado del contenido según mediaType ──────────────
+                  let content;
+                  const isDataUri = typeof msg.text === 'string' && msg.text.startsWith('data:');
+
+                  if (msg.mediaType === 'image' && isDataUri) {
+                    content = (
+                      <a href={msg.text} target="_blank" rel="noopener noreferrer">
+                        <img
+                          src={msg.text}
+                          alt="Imagen recibida"
+                          className="rounded-xl max-w-[260px] max-h-[260px] object-cover cursor-zoom-in"
+                          loading="lazy"
+                        />
+                      </a>
+                    );
+                  } else if (msg.mediaType === 'video' && isDataUri) {
+                    content = (
+                      <video
+                        src={msg.text}
+                        controls
+                        className="rounded-xl max-w-[260px] max-h-[200px]"
+                      />
+                    );
+                  } else if (msg.mediaType === 'audio' && isDataUri) {
+                    content = (
+                      <audio src={msg.text} controls className="w-full mt-1" />
+                    );
+                  } else if (msg.mediaType === 'document' && isDataUri) {
+                    content = (
+                      <a
+                        href={msg.text}
+                        download="documento"
+                        className="flex items-center gap-2 underline text-xs opacity-90 hover:opacity-100"
+                      >
+                        📎 Descargar documento
+                      </a>
+                    );
+                  } else {
+                    // Texto plano (o fallback de media sin dataURI)
+                    content = (
+                      <p className="leading-relaxed break-words whitespace-pre-wrap">
+                        {msg.text || (msg.mediaType ? `[${msg.mediaType}]` : '...')}
+                      </p>
+                    );
+                  }
+
+                  return (
                     <div
-                      className={`max-w-sm rounded-2xl p-3.5 shadow-sm text-sm border ${
-                        msg.fromMe
-                          ? 'bg-indigo-600 text-white rounded-br-none border-indigo-500/30'
-                          : 'bg-slate-900 text-slate-200 rounded-bl-none border-slate-800/80'
-                      }`}
+                      key={msg.id}
+                      className={`flex ${msg.fromMe ? 'justify-end' : 'justify-start'}`}
                     >
-                      <p className="leading-relaxed break-words whitespace-pre-wrap">{msg.text}</p>
-                      <span className={`text-[9px] block text-right mt-1.5 ${msg.fromMe ? 'text-indigo-200' : 'text-slate-500'}`}>
-                        {new Date(typeof msg.timestamp === 'string' && /^\d+$/.test(msg.timestamp) ? parseInt(msg.timestamp, 10) : msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
+                      <div
+                        className={`max-w-sm rounded-2xl p-3.5 shadow-sm text-sm border ${
+                          msg.fromMe
+                            ? 'bg-indigo-600 text-white rounded-br-none border-indigo-500/30'
+                            : 'bg-slate-900 text-slate-200 rounded-bl-none border-slate-800/80'
+                        }`}
+                      >
+                        {content}
+                        <span className={`text-[9px] block text-right mt-1.5 ${msg.fromMe ? 'text-indigo-200' : 'text-slate-500'}`}>
+                          {ts}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
               <div ref={messagesEndRef} />
             </div>
