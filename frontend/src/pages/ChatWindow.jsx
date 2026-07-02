@@ -2,16 +2,57 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 
-// Normaliza un JID eliminando el sufijo de dispositivo multi-device.
+// Normaliza un JID eliminando SOLO el sufijo de dispositivo multi-device (:N).
+// Preserva el dominio original (@s.whatsapp.net, @lid, etc.)
 // Ej: "573001234567:3@s.whatsapp.net" → "573001234567@s.whatsapp.net"
+// Ej: "46389975335013:0@lid"          → "46389975335013@lid"
 const normalizeJid = (jid = '') => {
-  if (!jid) return jid;
-  const [user, server] = jid.split('@');
-  return `${user.split(':')[0]}@${server || 's.whatsapp.net'}`;
+  if (!jid || typeof jid !== 'string') return jid;
+  const atIdx = jid.lastIndexOf('@');
+  if (atIdx === -1) return jid;
+  return `${jid.slice(0, atIdx).split(':')[0]}@${jid.slice(atIdx + 1)}`;
 };
 
-// Extrae el número de teléfono limpio a partir de un JID de WhatsApp.
-const extractPhone = (jid = '') => jid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+// Extrae la parte de usuario de un JID (puede ser número o ID opaco).
+// Para @lid el valor resultante NO es un número de teléfono válido.
+const extractPhone = (jid = '') => {
+  const atIdx = jid.lastIndexOf('@');
+  const user = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
+  return user.split(':')[0].replace(/\D/g, '');
+};
+
+/**
+ * Aplica formato internacional a un string numérico cuando el contacto no tiene nombre.
+ * Soporta los formatos más comunes de América Latina y EEUU/CA:
+ *   - 58 412 XXXXXXX  →  +58 412-XXXXXXX   (Venezuela)
+ *   - 57 300 XXXXXXX  →  +57 300-XXXXXXX   (Colombia)
+ *   - 1 NPA XXXXXXX   →  +1 (NPA) XXX-XXXX (EEUU/CA)
+ * Si el string no es puramente numérico o es un ID opaco (@lid), lo devuelve tal cual.
+ */
+const formatInternationalPhone = (raw = '') => {
+  const digits = raw.replace(/\D/g, '');
+  // JIDs @lid generan IDs que NO son números de teléfono (>13 dígitos o sin patrón CC)
+  if (!digits || digits.length < 10 || digits.length > 15) return raw || '?';
+
+  // Norte América: CC=1 + 10 dígitos → +1 (NPA) XXX-XXXX
+  if (digits.startsWith('1') && digits.length === 11) {
+    return `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+  // Formato genérico: asumir CC de 2 dígitos + operadora de 3 + 7 restantes
+  // Ej: 584121234567 → +58 412-1234567
+  if (digits.length === 12) {
+    return `+${digits.slice(0, 2)} ${digits.slice(2, 5)}-${digits.slice(5)}`;
+  }
+  // Formato genérico CC de 2 + 8 restantes  (ej. Argentina 11 dígitos)
+  if (digits.length === 11) {
+    return `+${digits.slice(0, 2)} ${digits.slice(2, 5)}-${digits.slice(5)}`;
+  }
+  // 10 dígitos sin CC (local)
+  if (digits.length === 10) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  return `+${digits}`;
+};
 
 // Formatea la hora o fecha del último mensaje
 const formatTimestamp = (ts) => {
@@ -59,9 +100,12 @@ export default function ChatWindow() {
       const msgTs = typeof msg.timestamp === 'string' && /^\d+$/.test(msg.timestamp) ? parseInt(msg.timestamp, 10) : Number(msg.timestamp);
 
       if (!map[jid]) {
+        // Para @lid: name puede venir de senderName; phone será el ID opaco (no telefónico)
+        const isLid = jid.endsWith('@lid');
         map[jid] = {
           jid,
           phone: extractPhone(jid),
+          isLid,
           name: msg.name && !msg.fromMe ? msg.name : null,
           lastMessage: msg.text,
           lastTimestamp: msgTs,
@@ -332,7 +376,11 @@ export default function ChatWindow() {
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-baseline">
                       <span className="font-semibold text-sm truncate block">
-                        {conv.name || `+${conv.phone}`}
+                        {conv.name
+                          ? conv.name
+                          : conv.isLid
+                            ? (conv.phone ? `ID: ${conv.phone.slice(-6)}` : '?')
+                            : formatInternationalPhone(conv.phone)}
                       </span>
                       <span className="text-[10px] text-slate-500 flex-shrink-0 ml-1">
                         {formatTimestamp(conv.lastTimestamp)}

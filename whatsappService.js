@@ -14,15 +14,21 @@ let connectionStatus = 'DISCONNECTED'; // DISCONNECTED, CONNECTING, QR_READY, CO
 let _pool = null;
 
 /**
- * Normaliza un JID de WhatsApp eliminando el sufijo de dispositivo multi-device.
- * Ej: "573001234567:3@s.whatsapp.net" → "573001234567@s.whatsapp.net"
- * Ej: "573001234567@s.whatsapp.net"   → "573001234567@s.whatsapp.net" (sin cambio)
+ * Normaliza un JID de WhatsApp eliminando SOLO el sufijo de dispositivo multi-device (:N).
+ * Preserva el dominio original (@s.whatsapp.net, @lid, @g.us, etc.).
+ *
+ * - JID estándar: "573001234567:3@s.whatsapp.net" → "573001234567@s.whatsapp.net"
+ * - JID @lid:     "46389975335013:0@lid"           → "46389975335013@lid"
+ *   (NO se aplica replace(/\D/g,'') para no corromper el identificador opaco)
  */
 const normalizeJid = (jid = '') => {
-  if (!jid) return jid;
-  const [user, server] = jid.split('@');
-  const cleanUser = user.split(':')[0];
-  return `${cleanUser}@${server || 's.whatsapp.net'}`;
+  if (!jid || typeof jid !== 'string') return jid;
+  const atIdx = jid.lastIndexOf('@');
+  if (atIdx === -1) return jid;                          // sin dominio → devolver tal cual
+  const server = jid.slice(atIdx + 1);                  // "s.whatsapp.net" | "lid" | "g.us"
+  const rawUser = jid.slice(0, atIdx);                  // puede traer el sufijo :N
+  const cleanUser = rawUser.split(':')[0];               // quitar :N
+  return `${cleanUser}@${server}`;
 };
 
 /**
@@ -223,7 +229,17 @@ const initializeWhatsApp = async (pool, sessionId = 'sanson_default_session') =>
             messageContent.videoMessage?.caption ||
             '[Mensaje multimedia]';
 
-          const senderName = fromMe ? 'Tú' : (msg.pushName || null);
+          // --- Resolución de pushName para JIDs @lid ---
+          // Los JIDs @lid son identificadores opacos internos de WhatsApp; no tienen
+          // número telefónico legible. Intentamos obtener el nombre público del contacto
+          // desde el store en memoria de Baileys antes de persistir.
+          let senderName = fromMe ? 'Tú' : (msg.pushName || null);
+          if (!fromMe && !senderName && from.endsWith('@lid') && sock.store?.contacts) {
+            const normFrom = normalizeJid(from);
+            const contact = sock.store.contacts[normFrom];
+            senderName = contact?.notify || contact?.name || contact?.verifiedName || null;
+          }
+
           const timestamp = (msg.messageTimestamp || Math.floor(Date.now() / 1000)) * 1000;
 
           // Persistir en PostgreSQL (fuente de verdad)
@@ -253,19 +269,21 @@ const sendMessage = async (jid, text) => {
     throw new Error('El servicio de WhatsApp no está conectado actualmente.');
   }
   
-  // Formatear JID
-  let formattedJid = jid;
+  // Formatear JID antes de enviar
+  // REGLA: para @lid conservamos el ID tal cual (es opaco, no es número de teléfono).
+  //        para @s.whatsapp.net limpiamos el sufijo :N y los no-dígitos del user.
+  //        Si no tiene dominio, se asume número individual → @s.whatsapp.net.
+  let formattedJid;
   if (jid.endsWith('@g.us')) {
-    // Si es un chat grupal, lo dejamos igual
+    formattedJid = normalizeJid(jid);                            // grupos: solo quitar :N
+  } else if (jid.endsWith('@lid')) {
+    formattedJid = normalizeJid(jid);                            // @lid: preservar ID opaco
   } else if (jid.includes('@')) {
-    // Si tiene dominio (como @lid o @s.whatsapp.net), quitamos el sufijo de dispositivo si existe
-    const [user, server] = jid.split('@');
-    const cleanUser = user.split(':')[0].replace(/\D/g, '');
-    formattedJid = `${cleanUser}@${server}`;
+    const norm = normalizeJid(jid);                              // quita :N
+    const [user, server] = norm.split('@');
+    formattedJid = `${user.replace(/\D/g, '')}@${server}`;      // solo s.whatsapp.net: solo dígitos
   } else {
-    // Si no tiene dominio, asumimos que es un número de teléfono individual
-    const cleanNumber = jid.replace(/\D/g, '');
-    formattedJid = `${cleanNumber}@s.whatsapp.net`;
+    formattedJid = `${jid.replace(/\D/g, '')}@s.whatsapp.net`;  // número crudo → dominio por defecto
   }
   
   const result = await sock.sendMessage(formattedJid, { text });
